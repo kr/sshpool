@@ -1,0 +1,6 @@
+Package sshpool provides a connection pool for SSH.
+Calling sshpool.Open will dial a new connection if
+necessary, and reuse an existing connection if
+possible.
+
+Documentation: http://godoc.org/github.com/kr/sshpool
