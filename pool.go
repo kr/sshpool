@@ -77,9 +77,6 @@ func (p *Pool) getConn(k, net, addr string, config *ssh.ClientConfig) *conn {
 func (p *Pool) removeConn(k string, c1 *conn) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.tab == nil {
-		p.tab = make(map[string]*conn)
-	}
 	c, ok := p.tab[k]
 	if ok && c == c1 {
 		delete(p.tab, k)
