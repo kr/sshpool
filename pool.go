@@ -2,7 +2,6 @@ package sshpool
 
 import (
 	"code.google.com/p/go.crypto/ssh"
-	"log"
 	"strconv"
 	"sync"
 )
@@ -20,7 +19,7 @@ type Pool struct {
 	// If nil, AddrUserKey is used.
 	Key func(net, addr string, config *ssh.ClientConfig) string
 
-	tab map[string]*ssh.ClientConn
+	tab map[string]*conn
 	mu  sync.Mutex
 }
 
@@ -33,11 +32,12 @@ var DefaultPool = new(Pool)
 func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, error) {
 	k := p.key(net, addr, config)
 	for {
-		c, err := p.getConn(k, net, addr, config)
-		if err != nil {
-			return nil, err
+		c := p.getConn(k, net, addr, config)
+		if c.err != nil {
+			p.removeConn(k, c)
+			return nil, c.err
 		}
-		s, err := c.NewSession()
+		s, err := c.c.NewSession()
 		if err == nil {
 			return s, nil
 		}
@@ -45,48 +45,40 @@ func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, e
 	}
 }
 
+type conn struct {
+	c   *ssh.ClientConn
+	wg  sync.WaitGroup
+	err error
+}
+
 // getConn gets an ssh connection from the pool for key.
 // If none is available, it dials anew.
-func (p *Pool) getConn(k, net, addr string, config *ssh.ClientConfig) (*ssh.ClientConn, error) {
+func (p *Pool) getConn(k, net, addr string, config *ssh.ClientConfig) *conn {
 	p.mu.Lock()
 	if p.tab == nil {
-		p.tab = make(map[string]*ssh.ClientConn)
+		p.tab = make(map[string]*conn)
 	}
 	c, ok := p.tab[k]
-	p.mu.Unlock()
 	if ok {
-		return c, nil
+		p.mu.Unlock()
+		c.wg.Wait()
+		return c
 	}
-
-	// Another goroutine can be dialing the same k here.
-	// We race to put a conn in the map, below.
-	c1, err := p.dial(net, addr, config)
-	if err != nil {
-		return nil, err
-	}
-
-	p.mu.Lock()
-	c, ok = p.tab[k]
-	if !ok {
-		// We won the race. Insert our conn.
-		c = c1
-		p.tab[k] = c
-	}
+	c = new(conn)
+	p.tab[k] = c
+	c.wg.Add(1)
 	p.mu.Unlock()
-	if ok {
-		// They won the race. Close our conn.
-		log.Printf("sshpool: discarding unused conn: %q", k)
-		c1.Close()
-	}
-	return c, nil
+	c.c, c.err = p.dial(net, addr, config)
+	c.wg.Done()
+	return c
 }
 
 // removeConn removes c1 from the pool if present.
-func (p *Pool) removeConn(k string, c1 *ssh.ClientConn) {
+func (p *Pool) removeConn(k string, c1 *conn) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.tab == nil {
-		p.tab = make(map[string]*ssh.ClientConn)
+		p.tab = make(map[string]*conn)
 	}
 	c, ok := p.tab[k]
 	if ok && c == c1 {
