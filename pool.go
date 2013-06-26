@@ -25,10 +25,10 @@ type Pool struct {
 
 var DefaultPool = new(Pool)
 
-// Open opens a new SSH session on the given server, reusing
-// an existing connection if possible. If no usable connection
-// is available, Open attempts to dial a new connection. If this
-// fails, Open returns an error.
+// Open starts a new SSH session on the given server, reusing
+// an existing connection if possible. If no connection exists,
+// or if opening the session fails, Open attempts to dial a new
+// connection. If dialing fails, Open returns the error from Dial.
 func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, error) {
 	k := p.key(net, addr, config)
 	for {
