@@ -32,7 +32,7 @@ func init() {
 	}
 }
 
-func dial(t *testing.T) *ssh.ClientConn {
+func dial(t *testing.T, rand io.Reader) *ssh.ClientConn {
 	l, err := ssh.Listen("tcp", "127.0.0.1:0", serverConfig)
 	if err != nil {
 		t.Fatal("unable to listen:", err)
@@ -63,6 +63,7 @@ func dial(t *testing.T) *ssh.ClientConn {
 		}
 	}()
 	config := &ssh.ClientConfig{
+		Rand: rand,
 		User: "testuser",
 		Auth: []ssh.ClientAuth{
 			ssh.ClientAuthPassword(clientPassword),
@@ -79,7 +80,7 @@ func TestOpenReuse(t *testing.T) {
 	c := 0
 	p := &Pool{Dial: func(net, addr string, config *ssh.ClientConfig) (*ssh.ClientConn, error) {
 		c++
-		return dial(t), nil
+		return dial(t, nil), nil
 	}}
 	config := &ssh.ClientConfig{
 		User: "u",
@@ -101,7 +102,7 @@ func TestOpenDistinct(t *testing.T) {
 	c := 0
 	p := &Pool{Dial: func(net, addr string, config *ssh.ClientConfig) (*ssh.ClientConn, error) {
 		c++
-		return dial(t), nil
+		return dial(t, nil), nil
 	}}
 	config := &ssh.ClientConfig{
 		User: "u",
@@ -132,13 +133,21 @@ func TestOpenFirstError(t *testing.T) {
 	}
 }
 
+type failReader bool
+
+func (r *failReader) Read(p []byte) (int, error) {
+	if r != nil && *r {
+		return 0, errors.New("fail")
+	}
+	return len(p), nil
+}
+
 func TestOpenRetry(t *testing.T) {
 	c := 0
-	var lastConn *ssh.ClientConn
+	rand := new(failReader)
 	p := &Pool{Dial: func(net, addr string, config *ssh.ClientConfig) (*ssh.ClientConn, error) {
 		c++
-		conn := dial(t)
-		lastConn = conn
+		conn := dial(t, rand)
 		return conn, nil
 	}}
 	config := &ssh.ClientConfig{
@@ -148,13 +157,19 @@ func TestOpenRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal("unexpected error:", err)
 	}
-	lastConn.Close()
+	conn := p.tab[p.key("net", "addr", config)].c
+	*rand = true
+	rand = nil
 	_, err = p.Open("net", "addr", config)
 	if err != nil {
 		t.Fatal("unexpected error:", err)
 	}
 	if c != 2 {
-		t.Fatal("want 1 call, got %d calls", c)
+		t.Fatalf("calls = %d want 2", c)
+	}
+	const errClosing = "use of closed network connection" // from package net
+	if err := conn.Close(); err == nil || err.Error() != errClosing {
+		t.Fatalf("conn still open, want closed; err = %v", err)
 	}
 }
 
@@ -164,7 +179,7 @@ func TestOpenSecondError(t *testing.T) {
 		if conn != nil {
 			return nil, errors.New("test error")
 		}
-		conn = dial(t)
+		conn = dial(t, nil)
 		return conn, nil
 	}}
 	config := &ssh.ClientConfig{

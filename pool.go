@@ -42,6 +42,7 @@ func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, e
 			return s, nil
 		}
 		p.removeConn(k, c)
+		c.c.Close()
 	}
 }
 
