@@ -2,6 +2,7 @@ package sshpool
 
 import (
 	"code.google.com/p/go.crypto/ssh"
+	"net"
 	"strconv"
 	"sync"
 )
@@ -12,8 +13,8 @@ func Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, error) {
 }
 
 type Pool struct {
-	// If nil, ssh.Dial is used.
-	Dial func(net, addr string, config *ssh.ClientConfig) (*ssh.ClientConn, error)
+	// If nil, net.Dial is used.
+	Dial func(net, addr string) (net.Conn, error)
 
 	// Computes a key to distinguish ssh connections.
 	// If nil, AddrUserKey is used.
@@ -84,12 +85,16 @@ func (p *Pool) removeConn(k string, c1 *conn) {
 	}
 }
 
-func (p *Pool) dial(net, addr string, config *ssh.ClientConfig) (*ssh.ClientConn, error) {
+func (p *Pool) dial(network, addr string, config *ssh.ClientConfig) (*ssh.ClientConn, error) {
 	dial := p.Dial
 	if dial == nil {
-		dial = ssh.Dial
+		dial = net.Dial
 	}
-	return dial(net, addr, config)
+	c, err := dial(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	return ssh.Client(c, config)
 }
 
 func (p *Pool) key(net, addr string, config *ssh.ClientConfig) string {

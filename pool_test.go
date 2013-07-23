@@ -4,6 +4,7 @@ import (
 	"code.google.com/p/go.crypto/ssh"
 	"errors"
 	"io"
+	"net"
 	"testing"
 )
 
@@ -24,6 +25,12 @@ var (
 			return false
 		},
 	}
+	clientConfig = &ssh.ClientConfig{
+		User: "testuser",
+		Auth: []ssh.ClientAuth{
+			ssh.ClientAuthPassword(clientPassword),
+		},
+	}
 )
 
 func init() {
@@ -32,7 +39,7 @@ func init() {
 	}
 }
 
-func dial(t *testing.T, rand io.Reader) *ssh.ClientConn {
+func dial(t *testing.T) net.Conn {
 	l, err := ssh.Listen("tcp", "127.0.0.1:0", serverConfig)
 	if err != nil {
 		t.Fatal("unable to listen:", err)
@@ -62,14 +69,7 @@ func dial(t *testing.T, rand io.Reader) *ssh.ClientConn {
 			ch.Close()
 		}
 	}()
-	config := &ssh.ClientConfig{
-		Rand: rand,
-		User: "testuser",
-		Auth: []ssh.ClientAuth{
-			ssh.ClientAuthPassword(clientPassword),
-		},
-	}
-	c, err := ssh.Dial("tcp", l.Addr().String(), config)
+	c, err := net.Dial("tcp", l.Addr().String())
 	if err != nil {
 		t.Fatal("unable to dial test server:", err)
 	}
@@ -78,18 +78,15 @@ func dial(t *testing.T, rand io.Reader) *ssh.ClientConn {
 
 func TestOpenReuse(t *testing.T) {
 	c := 0
-	p := &Pool{Dial: func(net, addr string, config *ssh.ClientConfig) (*ssh.ClientConn, error) {
+	p := &Pool{Dial: func(net, addr string) (net.Conn, error) {
 		c++
-		return dial(t, nil), nil
+		return dial(t), nil
 	}}
-	config := &ssh.ClientConfig{
-		User: "u",
-	}
-	_, err := p.Open("net", "addr", config)
+	_, err := p.Open("net", "addr", clientConfig)
 	if err != nil {
 		t.Fatal("unexpected error:", err)
 	}
-	_, err = p.Open("net", "addr", config)
+	_, err = p.Open("net", "addr", clientConfig)
 	if err != nil {
 		t.Fatal("unexpected error:", err)
 	}
@@ -100,18 +97,15 @@ func TestOpenReuse(t *testing.T) {
 
 func TestOpenDistinct(t *testing.T) {
 	c := 0
-	p := &Pool{Dial: func(net, addr string, config *ssh.ClientConfig) (*ssh.ClientConn, error) {
+	p := &Pool{Dial: func(net, addr string) (net.Conn, error) {
 		c++
-		return dial(t, nil), nil
+		return dial(t), nil
 	}}
-	config := &ssh.ClientConfig{
-		User: "u",
-	}
-	_, err := p.Open("net", "addr0", config)
+	_, err := p.Open("net", "addr0", clientConfig)
 	if err != nil {
 		t.Fatal("unexpected error:", err)
 	}
-	_, err = p.Open("net", "addr1", config)
+	_, err = p.Open("net", "addr1", clientConfig)
 	if err != nil {
 		t.Fatal("unexpected error:", err)
 	}
@@ -121,13 +115,10 @@ func TestOpenDistinct(t *testing.T) {
 }
 
 func TestOpenFirstError(t *testing.T) {
-	p := &Pool{Dial: func(net, addr string, config *ssh.ClientConfig) (*ssh.ClientConn, error) {
+	p := &Pool{Dial: func(net, addr string) (net.Conn, error) {
 		return nil, errors.New("test error")
 	}}
-	config := &ssh.ClientConfig{
-		User: "u",
-	}
-	_, err := p.Open("net", "addr0", config)
+	_, err := p.Open("net", "addr0", clientConfig)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -145,21 +136,21 @@ func (r *failReader) Read(p []byte) (int, error) {
 func TestOpenRetry(t *testing.T) {
 	c := 0
 	rand := new(failReader)
-	p := &Pool{Dial: func(net, addr string, config *ssh.ClientConfig) (*ssh.ClientConn, error) {
+	p := &Pool{Dial: func(net, addr string) (net.Conn, error) {
 		c++
-		conn := dial(t, rand)
+		conn := dial(t)
 		return conn, nil
 	}}
-	config := &ssh.ClientConfig{
-		User: "u",
-	}
+	config := new(ssh.ClientConfig)
+	*config = *clientConfig
+	config.Rand = rand
 	_, err := p.Open("net", "addr", config)
 	if err != nil {
 		t.Fatal("unexpected error:", err)
 	}
 	conn := p.tab[p.key("net", "addr", config)].c
 	*rand = true
-	rand = nil
+	config.Rand = nil
 	_, err = p.Open("net", "addr", config)
 	if err != nil {
 		t.Fatal("unexpected error:", err)
@@ -174,23 +165,20 @@ func TestOpenRetry(t *testing.T) {
 }
 
 func TestOpenSecondError(t *testing.T) {
-	var conn *ssh.ClientConn
-	p := &Pool{Dial: func(net, addr string, config *ssh.ClientConfig) (*ssh.ClientConn, error) {
+	var conn net.Conn
+	p := &Pool{Dial: func(net, addr string) (net.Conn, error) {
 		if conn != nil {
 			return nil, errors.New("test error")
 		}
-		conn = dial(t, nil)
+		conn = dial(t)
 		return conn, nil
 	}}
-	config := &ssh.ClientConfig{
-		User: "u",
-	}
-	_, err := p.Open("net", "addr", config)
+	_, err := p.Open("net", "addr", clientConfig)
 	if err != nil {
 		t.Fatal("unexpected error:", err)
 	}
 	conn.Close()
-	_, err = p.Open("net", "addr", config)
+	_, err = p.Open("net", "addr", clientConfig)
 	if err == nil {
 		t.Fatal("expected error")
 	}
