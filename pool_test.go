@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"testing"
+	"time"
 )
 
 // password implements ssh.ClientPassword
@@ -39,7 +40,15 @@ func init() {
 	}
 }
 
+type serverBehavior struct {
+	sessionDelay time.Duration
+}
+
 func dial(t *testing.T) net.Conn {
+	return configDial(t, new(serverBehavior))
+}
+
+func configDial(t *testing.T, b *serverBehavior) net.Conn {
 	l, err := ssh.Listen("tcp", "127.0.0.1:0", serverConfig)
 	if err != nil {
 		t.Fatal("unable to listen:", err)
@@ -57,6 +66,7 @@ func dial(t *testing.T) net.Conn {
 			return
 		}
 		for {
+			time.Sleep(b.sessionDelay)
 			ch, err := conn.Accept()
 			if err == io.EOF {
 				return
@@ -92,6 +102,16 @@ func TestOpenReuse(t *testing.T) {
 	}
 	if c != 1 {
 		t.Fatalf("want 1 call, got %d calls", c)
+	}
+}
+
+func TestSessionTimeout(t *testing.T) {
+	p := &Pool{Dial: func(net, addr string) (net.Conn, error) {
+		return configDial(t, &serverBehavior{sessionDelay: (5 * time.Second)}), nil
+	}, Timeout: (100 * time.Millisecond)}
+	_, err := p.Open("net", "addr", clientConfig)
+	if err == nil {
+		t.Fatal("expected timeout error; got nil")
 	}
 }
 

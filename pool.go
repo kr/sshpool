@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // Open opens a new SSH session on the given server using DefaultPool.
@@ -13,12 +14,17 @@ func Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, error) {
 }
 
 type Pool struct {
-	// If nil, net.Dial is used.
+	// If nil, net.Dialer is used with the given Timeout.
 	Dial func(net, addr string) (net.Conn, error)
 
 	// Computes a key to distinguish ssh connections.
 	// If nil, AddrUserKey is used.
 	Key func(net, addr string, config *ssh.ClientConfig) string
+
+	// Timeout for Open (for both new and existing
+	// connections). If Dial is not nil, it is up to the Dial func
+	// to enforce the timeout for new connections.
+	Timeout time.Duration
 
 	tab map[string]*conn
 	mu  sync.Mutex
@@ -31,31 +37,46 @@ var DefaultPool = new(Pool)
 // or if opening the session fails, Open attempts to dial a new
 // connection. If dialing fails, Open returns the error from Dial.
 func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, error) {
+	var deadline time.Time
+	if p.Timeout > 0 {
+		deadline = time.Now().Add(p.Timeout)
+	}
 	k := p.key(net, addr, config)
 	for {
-		c := p.getConn(k, net, addr, config)
+		c := p.getConn(k, net, addr, config, deadline)
 		if c.err != nil {
 			p.removeConn(k, c)
 			return nil, c.err
 		}
+		if p.Timeout > 0 {
+			c.netC.SetDeadline(deadline)
+		}
 		s, err := c.c.NewSession()
 		if err == nil {
+			if p.Timeout > 0 {
+				c.netC.SetDeadline(time.Time{})
+			}
 			return s, nil
 		}
 		p.removeConn(k, c)
 		c.c.Close()
+
+		if p.Timeout > 0 && time.Now().After(deadline) {
+			return nil, err
+		}
 	}
 }
 
 type conn struct {
-	c   *ssh.ClientConn
-	wg  sync.WaitGroup
-	err error
+	netC net.Conn
+	c    *ssh.ClientConn
+	wg   sync.WaitGroup
+	err  error
 }
 
 // getConn gets an ssh connection from the pool for key.
 // If none is available, it dials anew.
-func (p *Pool) getConn(k, net, addr string, config *ssh.ClientConfig) *conn {
+func (p *Pool) getConn(k, net, addr string, config *ssh.ClientConfig, deadline time.Time) *conn {
 	p.mu.Lock()
 	if p.tab == nil {
 		p.tab = make(map[string]*conn)
@@ -70,7 +91,7 @@ func (p *Pool) getConn(k, net, addr string, config *ssh.ClientConfig) *conn {
 	p.tab[k] = c
 	c.wg.Add(1)
 	p.mu.Unlock()
-	c.c, c.err = p.dial(net, addr, config)
+	c.netC, c.c, c.err = p.dial(net, addr, config, deadline)
 	c.wg.Done()
 	return c
 }
@@ -85,16 +106,22 @@ func (p *Pool) removeConn(k string, c1 *conn) {
 	}
 }
 
-func (p *Pool) dial(network, addr string, config *ssh.ClientConfig) (*ssh.ClientConn, error) {
+func (p *Pool) dial(network, addr string, config *ssh.ClientConfig, deadline time.Time) (net.Conn, *ssh.ClientConn, error) {
 	dial := p.Dial
 	if dial == nil {
-		dial = net.Dial
+		dialer := net.Dialer{Deadline: deadline}
+		dial = dialer.Dial
 	}
-	c, err := dial(network, addr)
+	netC, err := dial(network, addr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return ssh.Client(c, config)
+	sshC, err := ssh.Client(netC, config)
+	if err != nil {
+		netC.Close()
+		return nil, nil, err
+	}
+	return netC, sshC, nil
 }
 
 func (p *Pool) key(net, addr string, config *ssh.ClientConfig) string {
