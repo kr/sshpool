@@ -2,8 +2,10 @@ package sshpool
 
 import (
 	"code.google.com/p/go.crypto/ssh"
+	"log"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // Open opens a new SSH session on the given server using DefaultPool.
@@ -37,9 +39,31 @@ func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, e
 			p.removeConn(k, c)
 			return nil, c.err
 		}
-		s, err := c.c.NewSession()
-		if err == nil {
-			return s, nil
+		sessionCh := make(chan interface{})
+		go func() {
+			if s, err := c.c.NewSession(); err == nil {
+				select {
+				case sessionCh <- s:
+				}
+			} else {
+				select {
+				case sessionCh <- err:
+				}
+			}
+		}()
+		select {
+		case response := <-sessionCh:
+			switch resp := response.(type) {
+			case *ssh.Session:
+				return resp, nil
+			case error:
+				log.Print("sshpool: failed to establish new session: %v", resp)
+				// try again (see below)
+			default:
+				panic("sshpool: unexpected type on channel: %v", resp)
+			}
+		case <-time.After(2 * time.Second):
+			// give up; toss the connection and try again
 		}
 		p.removeConn(k, c)
 		c.c.Close()
