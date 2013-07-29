@@ -39,28 +39,22 @@ func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, e
 			p.removeConn(k, c)
 			return nil, c.err
 		}
-		sessionCh := make(chan interface{})
+		var s *ssh.Session
+		var err error
+		done := make(chan bool)
 		go func() {
-			if s, err := c.c.NewSession(); err == nil {
-				select {
-				case sessionCh <- s:
-				}
-			} else {
-				select {
-				case sessionCh <- err:
-				}
-			}
+			s, err = c.c.NewSession()
+			done <-true
 		}()
 		select {
-		case response := <-sessionCh:
-			switch resp := response.(type) {
-			case *ssh.Session:
-				return resp, nil
-			case error:
-				log.Print("sshpool: failed to establish new session: %v", resp)
-				// try again (see below)
-			default:
-				panic("sshpool: unexpected type on channel: %v", resp)
+		case <-done:
+			if err != nil {
+				log.Print("sshpool: failed to establish new session: %v", err)
+				// continue
+			} else if s != nil {
+				return s, nil
+			} else {
+				panic("sshpool: expected session when done with no error; got nil")
 			}
 		case <-time.After(2 * time.Second):
 			// give up; toss the connection and try again
