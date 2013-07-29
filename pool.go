@@ -2,6 +2,7 @@ package sshpool
 
 import (
 	"code.google.com/p/go.crypto/ssh"
+	"errors"
 	"log"
 	"strconv"
 	"sync"
@@ -39,28 +40,36 @@ func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, e
 			p.removeConn(k, c)
 			return nil, c.err
 		}
-		var s *ssh.Session
-		var err error
-		done := make(chan bool)
-		go func() {
-			s, err = c.c.NewSession()
-			done <-true
-		}()
-		select {
-		case <-done:
-			if err != nil {
-				log.Print("sshpool: failed to establish new session: %v", err)
-				// continue
-			} else if s != nil {
-				return s, nil
-			} else {
-				panic("sshpool: expected session when done with no error; got nil")
-			}
-		case <-time.After(2 * time.Second):
-			// give up; toss the connection and try again
+		s, err := p.timeoutNewSession(c, 2*time.Second)
+		if err == nil {
+			return s, nil
 		}
 		p.removeConn(k, c)
 		c.c.Close()
+	}
+}
+
+func (p *Pool) timeoutNewSession(c *conn, timeout time.Duration) (*ssh.Session, error) {
+	var s *ssh.Session
+	var err error
+	done := make(chan bool)
+	go func() {
+		s, err = c.c.NewSession()
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		if err != nil {
+			log.Print("sshpool: failed to establish new session: %v", err)
+			return nil, err
+		} else if s != nil {
+			return s, nil
+		} else {
+			panic("sshpool: expected session when done with no error; got nil")
+		}
+	case <-time.After(timeout):
+		return nil, errors.New("sshpool: new session timeout")
 	}
 }
 
