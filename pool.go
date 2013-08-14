@@ -37,9 +37,15 @@ var DefaultPool = new(Pool)
 // or if opening the session fails, Open attempts to dial a new
 // connection. If dialing fails, Open returns the error from Dial.
 func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, error) {
-	var deadline time.Time
+	var deadline, sessionDeadline time.Time
 	if p.Timeout > 0 {
-		deadline = time.Now().Add(p.Timeout)
+		now := time.Now()
+		deadline = now.Add(p.Timeout)
+
+		// First time, use a NewSession deadline at half of the
+		// overall timeout, to try to leave time for a subsequent
+		// Dial and NewSession.
+		sessionDeadline = now.Add(p.Timeout / 2)
 	}
 	k := p.key(net, addr, config)
 	for {
@@ -49,7 +55,8 @@ func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, e
 			return nil, c.err
 		}
 		if p.Timeout > 0 {
-			c.netC.SetDeadline(deadline)
+			c.netC.SetDeadline(sessionDeadline)
+			sessionDeadline = deadline
 		}
 		s, err := c.c.NewSession()
 		if err == nil {
