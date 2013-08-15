@@ -77,7 +77,7 @@ func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, e
 type conn struct {
 	netC net.Conn
 	c    *ssh.ClientConn
-	wg   sync.WaitGroup
+	ok   chan bool
 	err  error
 }
 
@@ -91,15 +91,14 @@ func (p *Pool) getConn(k, net, addr string, config *ssh.ClientConfig, deadline t
 	c, ok := p.tab[k]
 	if ok {
 		p.mu.Unlock()
-		c.wg.Wait()
+		<-c.ok
 		return c
 	}
-	c = new(conn)
+	c = &conn{ok: make(chan bool)}
 	p.tab[k] = c
-	c.wg.Add(1)
 	p.mu.Unlock()
 	c.netC, c.c, c.err = p.dial(net, addr, config, deadline)
-	c.wg.Done()
+	close(c.ok)
 	return c
 }
 
