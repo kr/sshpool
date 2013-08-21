@@ -54,20 +54,13 @@ func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, e
 			p.removeConn(k, c)
 			return nil, c.err
 		}
-		if p.Timeout > 0 {
-			c.netC.SetDeadline(sessionDeadline)
-			sessionDeadline = deadline
-		}
-		s, err := c.c.NewSession()
+		s, err := c.newSession(sessionDeadline)
 		if err == nil {
-			if p.Timeout > 0 {
-				c.netC.SetDeadline(time.Time{})
-			}
 			return s, nil
 		}
+		sessionDeadline = deadline
 		p.removeConn(k, c)
 		c.c.Close()
-
 		if p.Timeout > 0 && time.Now().After(deadline) {
 			return nil, err
 		}
@@ -79,6 +72,14 @@ type conn struct {
 	c    *ssh.ClientConn
 	ok   chan bool
 	err  error
+}
+
+func (c *conn) newSession(deadline time.Time) (*ssh.Session, error) {
+	if !deadline.IsZero() {
+		c.netC.SetDeadline(deadline)
+		defer c.netC.SetDeadline(time.Time{})
+	}
+	return c.c.NewSession()
 }
 
 // getConn gets an ssh connection from the pool for key.
