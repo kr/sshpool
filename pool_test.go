@@ -115,6 +115,16 @@ func TestSessionTimeout(t *testing.T) {
 	}
 }
 
+func TestSessionTimeoutSuccess(t *testing.T) {
+	p := &Pool{Dial: func(net, addr string) (net.Conn, error) {
+		return dial(t), nil
+	}, Timeout: (100 * time.Millisecond)}
+	_, err := p.Open("net", "addr", clientConfig)
+	if err != nil {
+		t.Fatal("unexpected error", err)
+	}
+}
+
 func TestOpenDistinct(t *testing.T) {
 	c := 0
 	p := &Pool{Dial: func(net, addr string) (net.Conn, error) {

@@ -2,6 +2,7 @@ package sshpool
 
 import (
 	"code.google.com/p/go.crypto/ssh"
+	"errors"
 	"net"
 	"strconv"
 	"sync"
@@ -68,18 +69,30 @@ func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, e
 }
 
 type conn struct {
-	netC net.Conn
-	c    *ssh.ClientConn
-	ok   chan bool
-	err  error
+	c   *ssh.ClientConn
+	ok  chan bool
+	err error
 }
 
 func (c *conn) newSession(deadline time.Time) (*ssh.Session, error) {
-	if !deadline.IsZero() {
-		c.netC.SetDeadline(deadline)
-		defer c.netC.SetDeadline(time.Time{})
+	if deadline.IsZero() {
+		return c.c.NewSession()
 	}
-	return c.c.NewSession()
+
+	var s *ssh.Session
+	var err error
+	done := make(chan bool, 1)
+	go func() {
+		s, err = c.c.NewSession()
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		return s, err
+	case <-time.After(-time.Since(deadline)):
+		return nil, errors.New("ssh: new session timeout")
+	}
 }
 
 // getConn gets an ssh connection from the pool for key.
@@ -98,7 +111,7 @@ func (p *Pool) getConn(k, net, addr string, config *ssh.ClientConfig, deadline t
 	c = &conn{ok: make(chan bool)}
 	p.tab[k] = c
 	p.mu.Unlock()
-	c.netC, c.c, c.err = p.dial(net, addr, config, deadline)
+	c.c, c.err = p.dial(net, addr, config, deadline)
 	close(c.ok)
 	return c
 }
@@ -113,7 +126,7 @@ func (p *Pool) removeConn(k string, c1 *conn) {
 	}
 }
 
-func (p *Pool) dial(network, addr string, config *ssh.ClientConfig, deadline time.Time) (net.Conn, *ssh.ClientConn, error) {
+func (p *Pool) dial(network, addr string, config *ssh.ClientConfig, deadline time.Time) (*ssh.ClientConn, error) {
 	dial := p.Dial
 	if dial == nil {
 		dialer := net.Dialer{Deadline: deadline}
@@ -121,14 +134,14 @@ func (p *Pool) dial(network, addr string, config *ssh.ClientConfig, deadline tim
 	}
 	netC, err := dial(network, addr)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	sshC, err := ssh.Client(netC, config)
 	if err != nil {
 		netC.Close()
-		return nil, nil, err
+		return nil, err
 	}
-	return netC, sshC, nil
+	return sshC, nil
 }
 
 func (p *Pool) key(net, addr string, config *ssh.ClientConfig) string {
