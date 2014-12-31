@@ -3,41 +3,36 @@ package sshpool
 import (
 	"code.google.com/p/go.crypto/ssh"
 	"errors"
-	"io"
 	"net"
 	"testing"
 	"time"
 )
 
-// password implements ssh.ClientPassword
-type password string
-
-func (p password) Password(user string) (string, error) {
-	return string(p), nil
-}
-
 var (
-	clientPassword = password("foo")
-	serverConfig   = &ssh.ServerConfig{
-		PasswordCallback: func(conn *ssh.ServerConn, user, pass string) bool {
-			return user == "testuser" && pass == string(clientPassword)
-		},
-		PublicKeyCallback: func(conn *ssh.ServerConn, user, algo string, pubkey []byte) bool {
-			return false
+	user         = "testuser"
+	password     = "foo"
+	serverConfig = &ssh.ServerConfig{
+		PasswordCallback: func(conn ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
+			if conn.User() == user && string(pass) == password {
+				return nil, nil
+			}
+			return nil, errors.New("invalid credentials")
 		},
 	}
 	clientConfig = &ssh.ClientConfig{
-		User: "testuser",
-		Auth: []ssh.ClientAuth{
-			ssh.ClientAuthPassword(clientPassword),
+		User: user,
+		Auth: []ssh.AuthMethod{
+			ssh.Password(password),
 		},
 	}
 )
 
 func init() {
-	if err := serverConfig.SetRSAPrivateKey([]byte(testServerPrivateKey)); err != nil {
+	signer, err := ssh.ParsePrivateKey([]byte(testServerPrivateKey))
+	if err != nil {
 		panic("unable to set private key: " + err.Error())
 	}
+	serverConfig.AddHostKey(signer)
 }
 
 type serverBehavior struct {
@@ -49,33 +44,31 @@ func dial(t *testing.T) net.Conn {
 }
 
 func configDial(t *testing.T, b *serverBehavior) net.Conn {
-	l, err := ssh.Listen("tcp", "127.0.0.1:0", serverConfig)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal("unable to listen:", err)
 	}
 	go func() {
 		defer l.Close()
-		conn, err := l.Accept()
+		nConn, err := l.Accept()
 		if err != nil {
 			t.Error("unable to accept:", err)
 			return
 		}
-		defer conn.Close()
-		if err := conn.Handshake(); err != nil {
+		defer nConn.Close()
+		_, chans, reqs, err := ssh.NewServerConn(nConn, serverConfig)
+		if err != nil {
 			t.Error("unable to handshake:", err)
 			return
 		}
-		for {
+		go ssh.DiscardRequests(reqs)
+		for newChannel := range chans {
 			time.Sleep(b.sessionDelay)
-			ch, err := conn.Accept()
-			if err == io.EOF {
-				return
-			}
+			ch, _, err := newChannel.Accept()
 			if err != nil {
 				t.Error("unable to accept:", err)
 				return
 			}
-			ch.Accept()
 			ch.Close()
 		}
 	}()
