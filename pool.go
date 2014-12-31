@@ -69,7 +69,7 @@ func (p *Pool) Open(net, addr string, config *ssh.ClientConfig) (*ssh.Session, e
 
 type conn struct {
 	netC net.Conn
-	c    *ssh.ClientConn
+	c    *ssh.Client
 	ok   chan bool
 	err  error
 }
@@ -113,7 +113,7 @@ func (p *Pool) removeConn(k string, c1 *conn) {
 	}
 }
 
-func (p *Pool) dial(network, addr string, config *ssh.ClientConfig, deadline time.Time) (net.Conn, *ssh.ClientConn, error) {
+func (p *Pool) dial(network, addr string, config *ssh.ClientConfig, deadline time.Time) (net.Conn, *ssh.Client, error) {
 	dial := p.Dial
 	if dial == nil {
 		dialer := net.Dialer{Deadline: deadline}
@@ -123,11 +123,12 @@ func (p *Pool) dial(network, addr string, config *ssh.ClientConfig, deadline tim
 	if err != nil {
 		return nil, nil, err
 	}
-	sshC, err := ssh.Client(netC, config)
+	conn, chans, reqs, err := ssh.NewClientConn(netC, addr, config)
 	if err != nil {
 		netC.Close()
 		return nil, nil, err
 	}
+	sshC := ssh.NewClient(conn, chans, reqs)
 	return netC, sshC, nil
 }
 
