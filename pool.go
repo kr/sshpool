@@ -1,11 +1,12 @@
 package sshpool
 
 import (
-	"code.google.com/p/go.crypto/ssh"
 	"net"
 	"strconv"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // Open opens a new SSH session on the given server using DefaultPool.

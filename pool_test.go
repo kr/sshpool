@@ -1,12 +1,13 @@
 package sshpool
 
 import (
-	"code.google.com/p/go.crypto/ssh"
 	"errors"
 	"io"
 	"net"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // password implements ssh.ClientPassword
